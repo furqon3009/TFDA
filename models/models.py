@@ -12,6 +12,41 @@ def get_backbone_class(backbone_name):
         raise NotImplementedError("Algorithm not found: {}".format(backbone_name))
     return globals()[backbone_name]
 
+class SpectralConv1d(nn.Module):
+    def __init__(self, in_channels, out_channels, modes1, fl=128):
+        super(SpectralConv1d, self).__init__()
+
+        """
+        1D Fourier layer. It does FFT, linear transform, and Inverse FFT.    
+        """
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.modes1 = modes1  #Number of Fourier modes to multiply, at most floor(N/2) + 1
+
+        self.scale = (1 / (in_channels*out_channels))
+        self.weights1 = nn.Parameter(self.scale * torch.rand(in_channels, out_channels, self.modes1, dtype=torch.cfloat))
+        self.pi = torch.acos(torch.zeros(1)).item() * 2
+        
+    # Complex multiplication
+    def compl_mul1d(self, input, weights):
+        # (batch, in_channel, x ), (in_channel, out_channel, x) -> (batch, out_channel, x)
+        return torch.einsum("bix,iox->box", input, weights)
+
+    def forward(self, x):
+        batchsize = x.shape[0]
+        #Compute Fourier coeffcients up to factor of e^(- something constant)
+        x = torch.cos(x)
+        x_ft = torch.fft.rfft(x,norm='ortho')
+        x_ft2 = torch.fft.fft(x).abs()
+    
+        out_ft = torch.zeros(batchsize, self.out_channels, x.size(-1)//2 + 1,  device=x.device, dtype=torch.cfloat)
+        
+        out_ft[:, :, :self.modes1] = self.compl_mul1d(x_ft[:, :, :self.modes1], self.weights1) 
+        
+        a = out_ft[:, :, :self.modes1].abs() # amplitude
+        p = out_ft[:, :, :self.modes1].angle() # phase
+        
+        return torch.cat([a,p],-1), out_ft
 
 ## Feature Extractor
 class CNN(nn.Module):
@@ -42,13 +77,18 @@ class CNN(nn.Module):
             nn.MaxPool1d(kernel_size=2, stride=2, padding=1),
         )
         self.aap = nn.AdaptiveAvgPool1d(configs.features_len)
+
+        
     def forward(self, x_in):
         x = self.conv_block1(x_in)
         x = self.conv_block2(x)
         x = self.conv_block3(x)
+        
         x_flat = self.aap(x).view(x.shape[0], -1)
 
         return x_flat, x
+
+    
 ##  Classifier
 class classifier(nn.Module):
     def __init__(self, configs):
@@ -60,6 +100,55 @@ class classifier(nn.Module):
     def forward(self, x):
         predictions = self.logits(x)
         return predictions
+
+class classifier2(nn.Module):
+    def __init__(self, configs):
+        super(classifier, self).__init__()
+
+        model_output_dim = configs.features_len
+        self.logits = nn.Linear(2*model_output_dim * configs.final_out_channels, configs.num_classes)
+        
+    
+    def forward(self, x):
+        predictions = self.logits(x)
+        return predictions
+
+class tf_encoder(nn.Module):
+    def __init__(self, configs):
+        super(tf_encoder, self).__init__()
+        self.modes1 = configs.fourier_modes   # Number of low-frequency modes to keep
+        self.width = configs.input_channels
+        self.length =  configs.sequence_len
+        self.freq_feature = SpectralConv1d(self.width, self.width, self.modes1,self.length)  # Frequency Feature Encoder
+        self.bn_freq = nn.BatchNorm1d(configs.fourier_modes*2)   # It doubles because frequency features contain both amplitude and phase
+        self.cnn = CNN(configs).to('cuda')  # Time Feature Encoder
+        self.cnn_f = CNN(configs).to('cuda')  # Frequency Feature Extractor
+
+        self.projector = nn.Sequential(
+            nn.Linear(configs.TSlength_aligned, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Linear(256, configs.TSlength_aligned)
+        )
+
+        self.projector_f = nn.Sequential(
+            nn.Linear(configs.TSlength_aligned, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Linear(256, configs.TSlength_aligned)
+        )
+
+
+    def forward(self, xt, xf):
+        
+        ef, _ = self.cnn_f(xf)
+        et, etx = self.cnn(xt)
+       
+        z_time = self.projector(et)
+        z_freq = self.projector_f(ef)
+        
+        return et, etx, ef, z_time, z_freq 
+
 ## Temporal Imputer
 class Temporal_Imputer(nn.Module):
     def __init__(self, configs):
@@ -67,19 +156,16 @@ class Temporal_Imputer(nn.Module):
         self.seq_length = configs.features_len
         self.num_channels = configs.final_out_channels
         self.hid_dim = configs.AR_hid_dim
-        # input size: batch_size, 128 channel, 18 seq_length
         self.rnn = nn.LSTM(input_size=self.num_channels, hidden_size=self.hid_dim)
 
     def forward(self, x):
         x = x.view(x.size(0), -1, self.num_channels)
         out, (h, c) = self.rnn(x)
         out = out.view(x.size(0), self.num_channels, -1)
-        # take the last time step
         return out
 
 # temporal masking
 def masking(x, num_splits=8, num_masked=4):
-    # num_masked = int(masking_ratio * num_splits)
     patches = rearrange(x, 'a b (p l) -> a b p l', p=num_splits)
     masked_patches = patches.clone()  # deepcopy(patches)
     # calculate of patches needed to be masked, and get random indices, dividing it up for mask vs unmasked
@@ -89,7 +175,6 @@ def masking(x, num_splits=8, num_masked=4):
     for i in range(masked_patches.shape[1]):
         masks.append(masked_patches[:, i, (selected_indices[i, :]), :])
         masked_patches[:, i, (selected_indices[i, :]), :] = 0
-        # orig_patches[:, i, (selected_indices[i, :]), :] =
     mask = rearrange(torch.stack(masks), 'b a p l -> a b (p l)')
     masked_x = rearrange(masked_patches, 'a b p l -> a b (p l)', p=num_splits)
 
@@ -114,6 +199,7 @@ def soft_k_nearest_neighbors(features, features_bank, probs_bank, num_neighbors)
         distances = get_distances(feats, features_bank)
         _, idxs = distances.sort()
         idxs = idxs[:, : num_neighbors]
+        
         # (64, num_nbrs, num_classes), average over dim=1
         probs = probs_bank[idxs, :].mean(1)
         pred_probs.append(probs)
@@ -165,8 +251,13 @@ def eval_and_label_dataset(epoch, FE, classifier, banks, test_dataloader, train_
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_dataloader):
-            test_inputs, test_targets, test_idxs = batch[0].cuda(), batch[1].cuda(), batch[2].cuda()
-            feats, _ = FE(test_inputs)
+        # for batch_idx, batch in enumerate(train_dataloader):
+            test_inputs, test_targets, test_idxs, test_inputs_f = batch[0].cuda(), batch[1].cuda(), batch[2].cuda(), batch[6].cuda()
+            # inputs, targets, idxs = batch[0].cuda(), batch[2].cuda(), batch[3].cuda()
+            feats, _, _, _, _ = FE(test_inputs, test_inputs_f)
+            # print(f'batch_idx:{batch_idx}')
+            # print(f'feats.shape:{feats.shape}')
+
             logits_cls = classifier(feats)
 
             features.append(feats)
@@ -182,7 +273,7 @@ def eval_and_label_dataset(epoch, FE, classifier, banks, test_dataloader, train_
     probs = F.softmax(logits, dim=1)
     rand_idxs = torch.randperm(len(features)).cuda()
     banks = {
-        "features": features[rand_idxs][: 16384], 
+        "features": features[rand_idxs][: 16384], #hanya diacak urutan indeksnya menggunakan rand_idxs
         "probs": probs[rand_idxs][: 16384],
         "ptr": 0,
     }
