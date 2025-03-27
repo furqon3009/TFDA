@@ -14,10 +14,6 @@ class Load_Dataset(Dataset):
 
         # Load samples
         x_data = dataset["samples"]
-        # print(f'x_data.shape:{x_data.shape}')
-        # print(f'len(x_data.shape):{len(x_data.shape)}')
-        # print(f'x_data.shape[1]:{x_data.shape[1]}')
-        # print(f'self.num_channels:{self.num_channels}')
 
         # Check samples dimensions.
         # The dimension of the data is expected to be (N, C, L)
@@ -25,15 +21,7 @@ class Load_Dataset(Dataset):
         if len(x_data.shape) == 2:
             x_data = x_data.unsqueeze(1)
         elif len(x_data.shape) == 3 and x_data.shape[1] != self.num_channels:
-            # x_data = x_data.transpose(1, 2)
             x_data = x_data.transpose(0, 2, 1)
-
-        # print('After:')
-        # print(f'x_data.shape:{x_data.shape}')
-        # print(f'len(x_data.shape):{len(x_data.shape)}')
-        # print(f'self.num_channels:{self.num_channels}')
-
-        
 
         x_data_weak, x_data_strong, x_data_strong2 = DataTransform(x_data, dataset_configs)
         
@@ -58,17 +46,11 @@ class Load_Dataset(Dataset):
         if y_data is not None and isinstance(y_data, np.ndarray):
             y_data = torch.from_numpy(y_data)
 
-        """Transfer x_data to Frequency Domain. If use fft.fft, the output has the same shape; if use fft.rfft, 
-        the output shape is half of the time window."""
+        """Transfer x_data to Frequency Domain."""
 
         window_length = x_data.shape[-1]
-        x_data_f = fft.fft(x_data).abs() #/(window_length) # rfft for real value inputs.
-        # print(f'x_data:{x_data}')
-        # print(f'x_data_f:{x_data_f}')
-        # print(f'x_data.shape:{x_data.shape}')
-        # print(f'x_data_f.shape:{x_data_f.shape}')
-
-        # x_data_f_weak, x_data_f_strong, x_data_f_strong2 = DataTransform(x_data_f, dataset_configs)
+        x_data_f = fft.fft(x_data).abs() 
+        
         x_data_f_weak, x_data_f_strong, x_data_f_strong2 = DataTransform_FD(x_data_f, dataset_configs)
 
         # Convert to torch tensor
@@ -144,7 +126,7 @@ class Load_Dataset(Dataset):
         if self.transform3:    
             x_strong2 = self.transform3(self.x_data_strong2[index].reshape(self.num_channels, -1, 1)).reshape(self.x_data_strong2[index].shape)
         y = self.y_data[index] if self.y_data is not None else None
-        # return x, y, index
+        
         return x_weak, y, index, x_strong, x_strong2, x, x_f_weak, x_f_strong, x_f_strong2, x_f
 
     def __len__(self):
@@ -173,4 +155,4 @@ def data_generator(data_path, domain_id, dataset_configs, hparams, dtype):
                                               drop_last=drop_last,
                                               num_workers=0)
 
-    return data_loader, dataset_length
+    return data_loader#, dataset_length
