@@ -10,6 +10,18 @@ def DataTransform(sample, config):
 
     return weak_aug, strong_aug, strong_aug2
 
+def DataTransform_FD(sample, config):
+    """Weak and strong augmentations in Frequency domain """
+    weak_aug = remove_frequency(sample, pertub_ratio=0.1)
+    aug_1 = remove_frequency(sample, pertub_ratio=0.1)
+    aug_2 = add_frequency(sample, pertub_ratio=0.1)
+    aug_3 = remove_frequency(sample, pertub_ratio=0.1)
+    aug_4 = add_frequency(sample, pertub_ratio=0.1)
+    aug_F = aug_1 + aug_2
+    aug_F2 = aug_3 + aug_4
+    # print(f'aug_F:{aug_F}')
+    # print(f'aug_F2:{aug_F2}')
+    return weak_aug, aug_F, aug_F2
 
 def jitter(x, sigma=0.8):
     # https://arxiv.org/pdf/1706.00527.pdf
@@ -45,4 +57,18 @@ def permutation(x, max_segments=5, seg_mode="random"):
         else:
             ret[i] = pat
     return torch.from_numpy(ret)
+
+def remove_frequency(x, pertub_ratio=0.0):
+    mask = torch.cuda.FloatTensor(x.shape).uniform_() > pertub_ratio # maskout_ratio are False
+    mask = mask.to(x.device)
+    return x*mask
+
+def add_frequency(x, pertub_ratio=0.0):
+
+    mask = torch.cuda.FloatTensor(x.shape).uniform_() > (1-pertub_ratio) # only pertub_ratio of all values are True
+    mask = mask.to(x.device)
+    max_amplitude = x.max()
+    random_am = torch.rand(mask.shape)*(max_amplitude*0.1)
+    pertub_matrix = mask*random_am
+    return x+pertub_matrix
 
