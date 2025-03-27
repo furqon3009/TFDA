@@ -19,8 +19,7 @@ def DataTransform_FD(sample, config):
     aug_4 = add_frequency(sample, pertub_ratio=0.1)
     aug_F = aug_1 + aug_2
     aug_F2 = aug_3 + aug_4
-    # print(f'aug_F:{aug_F}')
-    # print(f'aug_F2:{aug_F2}')
+    
     return weak_aug, aug_F, aug_F2
 
 def jitter(x, sigma=0.8):
