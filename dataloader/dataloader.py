@@ -25,7 +25,6 @@ class Load_Dataset(Dataset):
 
         x_data_weak, x_data_strong, x_data_strong2 = DataTransform(x_data, dataset_configs)
         
-
         # Convert to torch tensor
         if isinstance(x_data, np.ndarray):
             x_data = torch.from_numpy(x_data)
@@ -39,18 +38,15 @@ class Load_Dataset(Dataset):
         if isinstance(x_data_strong2, np.ndarray):
             x_data_strong2 = torch.from_numpy(x_data_strong2)
 
-        
-
         # Load labels
         y_data = dataset.get("labels")
         if y_data is not None and isinstance(y_data, np.ndarray):
             y_data = torch.from_numpy(y_data)
 
-        """Transfer x_data to Frequency Domain."""
-
+        """Transfer x_data to Frequency Domain. If use fft.fft, the output has the same shape; if use fft.rfft, 
+        the output shape is half of the time window."""
         window_length = x_data.shape[-1]
         x_data_f = fft.fft(x_data).abs() 
-        
         x_data_f_weak, x_data_f_strong, x_data_f_strong2 = DataTransform_FD(x_data_f, dataset_configs)
 
         # Convert to torch tensor
@@ -105,7 +101,6 @@ class Load_Dataset(Dataset):
         self.x_data_f_strong2 = x_data_f_strong2.float()
         self.y_data = y_data.long() if y_data is not None else None
         self.len = x_data.shape[0]
-        # self.len = x_data.shape[0]
 
     def __getitem__(self, index):
         x = self.x_data[index]
@@ -126,7 +121,6 @@ class Load_Dataset(Dataset):
         if self.transform3:    
             x_strong2 = self.transform3(self.x_data_strong2[index].reshape(self.num_channels, -1, 1)).reshape(self.x_data_strong2[index].shape)
         y = self.y_data[index] if self.y_data is not None else None
-        
         return x_weak, y, index, x_strong, x_strong2, x, x_f_weak, x_f_strong, x_f_strong2, x_f
 
     def __len__(self):
@@ -155,4 +149,4 @@ def data_generator(data_path, domain_id, dataset_configs, hparams, dtype):
                                               drop_last=drop_last,
                                               num_workers=0)
 
-    return data_loader#, dataset_length
+    return data_loader, dataset_length
