@@ -1,7 +1,6 @@
 import sys
 
-# sys.path.append('../ADATIME')
-sys.path.append('/home/furqon/SFTSDA')
+sys.path.append('/home/furqon/TFDA')
 
 import os
 import pandas as pd
@@ -58,8 +57,7 @@ class Trainer(AbstractTrainer):
                 self.load_data(src_id, trg_id)
 
                 # Train model
-                non_adapted_model, last_adapted_model, best_adapted_model = self.train_model()
-
+                src_FE, src_Classifier, tgt_last_adapted_FE, tgt_last_adapted_Classifier, tgt_best_adapted_FE, tgt_best_adapted_Classifier, non_adapted_model, last_adapted_model, best_adapted_model = self.train_model()
                 
                 # Save checkpoint
                 self.save_checkpoint(self.home_path, self.scenario_log_dir, non_adapted_model, last_adapted_model,
@@ -73,15 +71,6 @@ class Trainer(AbstractTrainer):
                 scenario = f"{src_id}_to_{trg_id}"
                 table_results = self.append_results_to_tables(table_results, scenario, run_id, metrics)
                 table_risks = self.append_results_to_tables(table_risks, scenario, run_id, risks)
-
-                # TSNE plot
-                if args.plot_tsne:
-                    plot_tsne(src_FE, src_Classifier, self.src_train_dl, self.trg_train_dl, self.device, self.scenario_log_dir, 'src_only', 'train', run_id)
-                    plot_tsne(tgt_last_adapted_FE, tgt_last_adapted_Classifier, self.src_train_dl, self.trg_train_dl, self.device, self.scenario_log_dir, f'{args.da_method}', 'train', run_id)
-
-                    plot_tsne(src_FE, src_Classifier, self.src_test_dl, self.trg_test_dl, self.device, self.scenario_log_dir, 'src_only', 'test', run_id)
-                    plot_tsne(tgt_last_adapted_FE, tgt_last_adapted_Classifier, self.src_test_dl, self.trg_test_dl, self.device, self.scenario_log_dir, f'{args.da_method}', 'test', run_id)
-
 
         # Calculate and append mean and std to tables
         table_results = self.add_mean_std_table(table_results, results_columns)
@@ -99,14 +88,14 @@ if __name__ == "__main__":
     parser.add_argument('-run_description', default=None, type=str, help='Description of run, if none, DA method name will be used')
 
     # ========= Select the DA methods ============
-    parser.add_argument('--da_method', default='SFTSDA', type=str, help='SHOT, AaD, NRC, MAPU,')
+    parser.add_argument('--da_method', default='TFDA', type=str, help='SHOT, AaD, NRC, MAPU,')
 
     # ========= Select the DATASET ==============
-    parser.add_argument('--data_path', default=r'/home/furqon/SFTSDA/data/MFD Dataset', type=str, help='Path containing datase2t')
-    parser.add_argument('--dataset', default='FD', type=str, help='Dataset of choice: (WISDM - EEG - HAR - HHAR_SA)')
-    # parser.add_argument('--data_path', default=r'/home/furqon/SFTSDA/data/HAR Dataset', type=str, help='Path containing datase2t')
-    # parser.add_argument('--dataset', default='HAR', type=str, help='Dataset of choice: (WISDM - EEG - HAR - HHAR_SA)')
-    # parser.add_argument('--data_path', default=r'/home/furqon/SFTSDA/data/SSC Dataset', type=str, help='Path containing datase2t')
+    # parser.add_argument('--data_path', default=r'/home/furqon/TFDA/data/MFD Dataset', type=str, help='Path containing datase2t'))
+    # parser.add_argument('--dataset', default='FD', type=str, help='Dataset of choice: (WISDM - EEG - HAR - HHAR_SA)')
+    parser.add_argument('--data_path', default=r'/home/furqon/TFDA/data/HAR Dataset', type=str, help='Path containing datase2t')
+    parser.add_argument('--dataset', default='HAR', type=str, help='Dataset of choice: (WISDM - EEG - HAR - HHAR_SA)')
+    # parser.add_argument('--data_path', default=r'/home/furqon/TFDA/data/SSC Dataset', type=str, help='Path containing datase2t'))
     # parser.add_argument('--dataset', default='EEG', type=str, help='Dataset of choice: (WISDM - EEG - HAR - HHAR_SA)')
 
     # ========= Select the BACKBONE ==============
@@ -115,9 +104,9 @@ if __name__ == "__main__":
     # ========= Experiment settings ===============
     parser.add_argument('--num_runs', default=3, type=int, help='Number of consecutive run with different seeds')
     parser.add_argument('--device', default="cuda", type=str, help='cpu or cuda')
-    parser.add_argument('--num_neighbors', default=15, type=int)
+    parser.add_argument('--num_neighbors', default=10, type=int)
     parser.add_argument('--temporal_length', default=5, type=int)
-    parser.add_argument('--plot_tsne', default=False, type=bool, help='Plot t-sne for training and testing or not?')
+    parser.add_argument('--plot_tsne', default=True, type=bool, help='Plot t-sne for training and testing or not?')
 
     args = parser.parse_args()
 
