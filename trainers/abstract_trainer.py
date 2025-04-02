@@ -36,11 +36,14 @@ class AbstractTrainer(object):
 
         self.experiment_description = args.dataset
 
+
         # paths
         self.home_path = os.path.dirname(os.getcwd())
         self.save_dir = args.save_dir
         self.data_path = os.path.join(args.data_path, self.dataset)
         self.num_neighbors = args.num_neighbors
+        # self.create_save_dir(os.path.join(self.home_path,  self.save_dir ))
+
 
         # Specify runs
         self.num_runs = args.num_runs
@@ -81,19 +84,19 @@ class AbstractTrainer(object):
         self.logger.debug(f'Pretraining stage..........')
         self.logger.debug("=" * 45)
 
-        self.non_adapted_model = self.algorithm.pretrain(self.src_train_dl, self.pre_loss_avg_meters, self.logger)
+        self.src_fe, self.src_classifier, self.non_adapted_model = self.algorithm.pretrain(self.src_train_dl, self.pre_loss_avg_meters, self.logger)
         # adapting step
         self.logger.debug("=" * 45)
         self.logger.debug(f'Adaptation stage..........')
         self.logger.debug("=" * 45)
 
-        self.last_model, self.best_model = self.algorithm.update(self.trg_train_dl, self.trg_test_dl, self.loss_avg_meters, self.logger, self.num_neighbors, self.dataset_configs, self.temp_length, self.trg_train_length)
+        self.tgt_last_model_fe, self.tgt_last_model_classifier, self.tgt_best_model_fe, self.tgt_best_model_classifier, self.last_model, self.best_model = self.algorithm.update(self.trg_train_dl, self.trg_test_dl, self.loss_avg_meters, self.logger, self.num_neighbors, self.dataset_configs, self.temp_length, self.trg_train_length)
 
-        return self.non_adapted_model,  self.last_model, self.best_model
+        return self.src_fe, self.src_classifier, self.tgt_last_model_fe, self.tgt_last_model_classifier, self.tgt_best_model_fe, self.tgt_best_model_classifier, self.non_adapted_model,  self.last_model, self.best_model
     
     def evaluate(self, test_loader):
         feature_extractor = self.algorithm.feature_extractor.to(self.device)
-        classifier = self.algorithm.classifier.to(self.device)
+        classifier = self.algorithm.classifier_t.to(self.device)
 
         feature_extractor.eval()
         classifier.eval()
@@ -101,18 +104,19 @@ class AbstractTrainer(object):
         total_loss, preds_list, labels_list = [], [], []
 
         with torch.no_grad():
-            for data, labels,_, _, _, _ in test_loader:
+            for data, labels,_, _, _, _, data_f, _, _, _ in test_loader:
                 data = data.float().to(self.device)
+                data_f = data.float().to(self.device)
                 labels = labels.view((-1)).long().to(self.device)
 
                 # forward pass
-                features, seq_features = feature_extractor(data)
+                features, seq_features, _, _, _ = feature_extractor(data, data_f)
                 predictions = classifier(features)
 
                 # compute loss
                 loss = F.cross_entropy(predictions, labels)
                 total_loss.append(loss.item())
-                pred = predictions.detach()  # .argmax(dim=1)  # get the index of the max log-probability
+                pred = predictions.detach() 
 
                 # append predictions and labels
                 preds_list.append(pred)
@@ -147,11 +151,8 @@ class AbstractTrainer(object):
 
         # calculate metrics
         acc = self.ACC(self.full_preds.argmax(dim=1).cpu(), self.full_labels.cpu()).item()
-        # f1_torch
         f1 = self.F1(self.full_preds.argmax(dim=1).cpu(), self.full_labels.cpu()).item()
         auroc = self.AUROC(self.full_preds.cpu(), self.full_labels.cpu()).item()
-        # f1_sk learn
-        # f1 = f1_score(self.full_preds.argmax(dim=1).cpu().numpy(), self.full_labels.cpu().numpy(), average='macro')
 
         risks = src_risk, trg_risk
         metrics = acc, f1, auroc
@@ -195,7 +196,6 @@ class AbstractTrainer(object):
         # Estimate summary metrics
         summary_metrics = {metric: np.mean(results.get_column(metric)) for metric in results.columns[2:]}
         summary_risks = {risk: np.mean(risks.get_column(risk)) for risk in risks.columns[2:]}
-
 
         # append avg and std values to metrics
         results.add_data('mean', '-', *avg_metrics)
