@@ -196,7 +196,6 @@ class SFTSDA(Algorithm):
         super(SFTSDA, self).__init__(configs)
 
         self.feature_extractor = tf_encoder(configs)
-        
         self.classifier_t = classifier(configs)
         self.classifier_f = classifier(configs)
         self.temporal_verifier = Temporal_Imputer(configs)
@@ -207,7 +206,6 @@ class SFTSDA(Algorithm):
         self.network1 = nn.Sequential(self.feature_extractor, self.classifier_t)
         self.network2 = nn.Sequential(self.feature_extractor, self.classifier_f)
         self.momentum_network = nn.Sequential(self.momentum_feature_extractor, self.momentum_classifier)
-
 
         self.optimizer_t = torch.optim.Adam(
             self.network1.parameters(),
@@ -259,7 +257,8 @@ class SFTSDA(Algorithm):
                 src_xf = src_xf.float().to(self.device)
 
                 self.pre_optimizer.zero_grad()
-                
+
+                # forward pass correct sequences
                 src_feat, seq_src_feat, src_feat_f, _, _ = self.feature_extractor(src_x, src_xf)
 
                 # classifier predictions
@@ -280,14 +279,11 @@ class SFTSDA(Algorithm):
                 
                 src_pred = an * src_pred_t + bn * src_pred_f
                 
-
-
                 # normal cross entropy
                 src_cls_loss = self.cross_entropy(src_pred, src_y)
 
-                total_loss = src_cls_loss #+ tov_loss
+                total_loss = src_cls_loss 
                 total_loss.backward()
-
                 self.pre_optimizer.step()
                 
                 losses = {'cls_loss': src_cls_loss.detach().item()}
@@ -317,14 +313,12 @@ class SFTSDA(Algorithm):
         tgt_best_classifier = self.classifier_t
 
         moco_model = AdaMoCo(src_model = self.network1, momentum_model = self.momentum_network, features_length=configs.final_out_channels, num_classes=self.configs.num_classes, dataset_length=trg_train_dataset_length, temporal_length=temp_length)
-
         banks = eval_and_label_dataset(0, self.feature_extractor, self.classifier_t, None, trg_test_dataloader, trg_dataloader, num_neighbors)
         # freeze both classifier and ood detector
         for k, v in self.classifier_t.named_parameters():
             v.requires_grad = False
         for k, v in self.classifier_f.named_parameters():
             v.requires_grad = False
-        
 
         N = 12
         alpha = 0.005
@@ -335,17 +329,14 @@ class SFTSDA(Algorithm):
             self.feature_extractor.train()
             self.classifier_t.train()
             self.network1.train()
-            
             self.classifier_f.train()
             self.network2.train()
             moco_model.train()
 
-            
             for step, (trg_x, y, trg_idx, src_x_strong, src_x_strong2, x, x_f_weak, x_f_strong, x_f_strong2, x_f) in enumerate(trg_dataloader):
 
                 trg_x = trg_x.float().to(self.device)
                 x_f_weak = x_f_weak.float().to(self.device)
-                # print(f'trg_x.shape:{trg_x.shape}')
                 x = x.float().to(self.device)
                 x_f = x_f.float().to(self.device)
                 src_x_strong, src_x_strong2 = src_x_strong.float().to(self.device), src_x_strong2.float().to(self.device)
@@ -354,62 +345,48 @@ class SFTSDA(Algorithm):
                 self.optimizer_t.zero_grad()
                 self.optimizer_f.zero_grad()
 
-
                 trg_q, trg_k = (
                     trg_x[0].to("cuda"),
                     trg_x[1].to("cuda"),
                 )
 
-
                 outputs_emas = []
-                
-
 
                 with torch.no_grad():
                     for jj in range(N-2):
                         outputs_emas.append(moco_model(trg_x, x_f_weak, self.feature_extractor, self.classifier_t, self.classifier_f, self.momentum_feature_extractor, self.momentum_classifier, cls_only=True)[1]) 
-
                     
                     outputs_ema = torch.stack(outputs_emas).mean(0)
-                    
                     logits_w = torch.nn.functional.softmax(outputs_ema, dim=1)
                     probs_w, pseudo_labels_w = logits_w.max(dim=1)
 
-                    
+                # extract features
                 trg_feat, trg_pred, trg_feat_f, trg_pred_f  = moco_model(trg_x, x_f_weak, self.feature_extractor, self.classifier_t, self.classifier_f, self.momentum_feature_extractor, self.momentum_classifier, ema_only=True)
-                
+
                 trg_prob = torch.nn.Softmax(dim=1)(trg_pred)
-
                 trg_prob_f = torch.nn.Softmax(dim=1)(trg_pred_f)
-               
-
+                
                 # pseudolabel
                 _, pseudo_labels = trg_prob.max(dim=1)
-                
 
                 # Pseudo-label refinement
                 with torch.no_grad():
                     probs = trg_prob
                     pseudo_labels, probs_refine, _, _ = refine_predictions(trg_feat, probs, banks, num_neighbors)
-                    
 
                 # # Sample Selection ---------------------------------------------------------------------
                 pred_batch, _ = trg_prob.max(dim=1)
-                
                 pred_start = torch.nn.functional.softmax(torch.squeeze(torch.stack(outputs_emas)), dim=2).max(2)[0] 
-
                 ## Confidence Based Selection
                 pred_con = pred_start
                 conf_thres = pred_con.mean()
                 confidence_sel = pred_con.mean(0) > conf_thres
                 conf_th = pred_con.mean()
-
                 ## Uncertainty Based Selection
                 pred_std = pred_start.std(0)
                 uncertainty_thres = pred_std.mean(0)
                 uncertainty_sel = pred_std < uncertainty_thres
                 uncer_th = pred_std.mean(0)
-
                 ## Confidence and Uncertainty Based Selection
                 truth_array = torch.logical_and(uncertainty_sel, confidence_sel)
                 ind_keep = torch.squeeze(truth_array.nonzero(), dim=-1)
@@ -432,7 +409,7 @@ class SFTSDA(Algorithm):
 
                     pre_threshold = threshold.mean(0) 
                     truth_array1  = threshold > pre_threshold
-                    truth_array2  = pred_std[ind_remove] < pred_std[ind_remove].mean(0)                   ## Add Underconfident Clean Samples 
+                    truth_array2  = pred_std[ind_remove] < pred_std[ind_remove].mean(0)                   
                     truth_array   = torch.logical_and(truth_array1.cuda(), truth_array2.cuda())
                     ind_add       = truth_array.nonzero()
                     
@@ -453,24 +430,18 @@ class SFTSDA(Algorithm):
                         missing_classes = [ii for ii in range(self.configs.num_classes) if ii not in unique_labels]
                         
                         for kk in missing_classes:
-                            indices = (pseudo_labels_w == kk).nonzero(as_tuple=True)[0] # find missing classes in pseudo label
-
+                            indices = (pseudo_labels_w == kk).nonzero(as_tuple=True)[0] # find missing classes in pseudo labels
                             if indices.numel()>0 and ind_keep.numel()>0:
-                                
                                 probs2,_  = probs_w[indices]
-                                
-                                _ , index_miss = probs2.sort(descending=True)                              
-                    
+                                _ , index_miss = probs2.sort(descending=True)  
                                 try:
                                     ind_keep  = torch.cat((ind_keep, indices[index_miss[0:min_count]]))
                                     ind_remove = torch.stack([kk for kk in ind_total if kk not in ind_keep])
                                 except:
                                     pass
-                                
                                 counts_new[kk] = 1 
                             else:
                                 counts_new[kk] = 1
-                        
                         ## Other Classes
                         num = 0
                         for nn in unique_labels:
@@ -478,15 +449,12 @@ class SFTSDA(Algorithm):
                             num += 1
                     else:
                         counts_new = counts 
-
                     trg_cls_loss = self.cross_entropy(trg_pred[ind_keep], pseudo_labels_w[ind_keep])
 
                 except:
-                    # label propagation loss
                     trg_cls_loss = torch.mean((torch.squeeze(outputs_ema)-torch.squeeze(trg_pred))**2)
-                    
-                
-                 ### Propagation Loss ###
+
+                ### Propagation Loss ###
                 ## If the clean selected set is empty, calculate loss for all samples  
                 try:
                     propagation_loss = torch.mean((torch.squeeze(outputs_ema[ind_remove])-torch.squeeze(trg_pred[ind_remove]))**2)
@@ -497,7 +465,6 @@ class SFTSDA(Algorithm):
                 loss_sd = self.kl_loss(trg_prob, trg_prob_f) + self.kl_loss(trg_prob_f, trg_prob)
                 _, logits_q, logits_ctr, keys, logits_ctr_f, keys_f, _, _ = moco_model(trg_x, x_f_weak, self.feature_extractor, self.classifier_t, self.classifier_f, self.momentum_feature_extractor, self.momentum_classifier, src_x_strong, x_f_strong)
                 _, _, _, _, _, _, logits_ctr_tf, keys_zf = moco_model(trg_x, x_f_weak, self.feature_extractor, self.classifier_t, self.classifier_f, self.momentum_feature_extractor, self.momentum_classifier, trg_x, x_f_weak)
-                
 
                 loss_ctr_t = contrastive_loss(logits_ins=logits_ctr, pseudo_labels=moco_model.mem_labels[trg_idx], mem_labels=moco_model.mem_labels[moco_model.idxs])
                 loss_ctr_f = contrastive_loss(logits_ins=logits_ctr_f, pseudo_labels=moco_model.mem_labels[trg_idx], mem_labels=moco_model.mem_labels[moco_model.idxs])
@@ -510,10 +477,8 @@ class SFTSDA(Algorithm):
 
                 # uncertainty reduction loss
                 loss_ur = TEntropyLoss(t=configs.temp)(trg_prob)
-                
 
-                #-------------------------------------------------------------------------------------------------------------------------------
-                
+                # Curriculum learning
                 d = uncertainty_thres/conf_thres
                 if epoch == 1:
                     mu_r = 1
@@ -530,7 +495,6 @@ class SFTSDA(Algorithm):
                 Overall objective loss
                 '''
                 loss = mu_r*trg_cls_loss + (1-mu_r)*propagation_loss + mu_c*loss_ctr + mu_u*loss_ur + mu_s*loss_sd
-                
 
                 update_labels(banks, trg_idx, trg_feat, trg_pred)
 
